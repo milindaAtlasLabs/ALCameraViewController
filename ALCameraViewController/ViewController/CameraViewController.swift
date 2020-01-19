@@ -33,6 +33,7 @@ public extension CameraViewController {
                     }
                 }
                 confirmController.modalTransitionStyle = UIModalTransitionStyle.crossDissolve
+                confirmController.modalPresentationStyle = .fullScreen
                 imagePicker?.present(confirmController, animated: true, completion: nil)
             } else {
                 completion(nil, nil)
@@ -285,6 +286,13 @@ open class CameraViewController: UIViewController {
         NotificationCenter.default.removeObserver(self)
         volumeControl = nil
     }
+    
+    
+    open override func viewDidDisappear(_ animated: Bool) {
+        if cameraView.session?.isRunning == true {
+                  cameraView.stopSession()
+              }
+    }
 
     /**
      * This method will disable the rotation of the
@@ -534,9 +542,9 @@ open class CameraViewController: UIViewController {
 
             self?.onCompletion?(image, asset)
         }
-        
+        imagePicker.modalPresentationStyle = .fullScreen
         present(imagePicker, animated: true) { [weak self] in
-            self?.cameraView.stopSession()
+//            self?.cameraView.stopSession()
         }
     }
     
@@ -560,13 +568,13 @@ open class CameraViewController: UIViewController {
     }
 	
 	internal func layoutCameraResult(uiImage: UIImage) {
-		cameraView.stopSession()
+//		cameraView.stopSession()
 		startConfirmController(uiImage: uiImage)
 		toggleButtons(enabled: true)
 	}
 	
     internal func layoutCameraResult(asset: PHAsset) {
-        cameraView.stopSession()
+//        cameraView.stopSession()
         startConfirmController(asset: asset)
         toggleButtons(enabled: true)
     }
@@ -586,6 +594,7 @@ open class CameraViewController: UIViewController {
 			self?.onCompletion = nil
 		}
 		confirmViewController.modalTransitionStyle = UIModalTransitionStyle.crossDissolve
+        confirmViewController.modalPresentationStyle = .fullScreen
 		present(confirmViewController, animated: true, completion: nil)
 	}
 	
@@ -604,6 +613,7 @@ open class CameraViewController: UIViewController {
             self?.onCompletion = nil
         }
         confirmViewController.modalTransitionStyle = UIModalTransitionStyle.crossDissolve
+        confirmViewController.modalPresentationStyle = .fullScreen
         present(confirmViewController, animated: true, completion: nil)
     }
 
