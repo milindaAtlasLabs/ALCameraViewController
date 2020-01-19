@@ -1,408 +1,163 @@
-//
-//  ALConfirmViewController.swift
-//  ALCameraViewController
-//
-//  Created by Alex Littlejohn on 2015/06/30.
-//  Copyright (c) 2015 zero. All rights reserved.
-//
-
-import UIKit
-import Photos
-
-public class ConfirmViewController: UIViewController {
-	
-	let imageView = UIImageView()
-	@IBOutlet weak var scrollView: UIScrollView!
-	@IBOutlet weak var cancelButton: UIButton!
-	@IBOutlet weak var confirmButton: UIButton!
-	@IBOutlet weak var centeredView: UIView!
-
-    private let cropOverlay = CropOverlay()
-    private var spinner: UIActivityIndicatorView? = nil
-    private var cropOverlayLeftConstraint = NSLayoutConstraint()
-    private var cropOverlayTopConstraint = NSLayoutConstraint()
-    private var cropOverlayWidthConstraint = NSLayoutConstraint()
-    private var cropOverlayHeightConstraint = NSLayoutConstraint()
-    private var isFirstLayout = true
-	
-    var croppingParameters: CroppingParameters {
-        didSet {
-            cropOverlay.isResizable = croppingParameters.allowResizing
-            cropOverlay.minimumSize = croppingParameters.minimumSize
-        }
-    }
-
-    private var scrollViewVisibleSize: CGSize {
-        let contentInset = scrollView.contentInset
-        let scrollViewSize = scrollView.bounds.standardized.size
-        let width = scrollViewSize.width - contentInset.left - contentInset.right
-        let height = scrollViewSize.height - contentInset.top - contentInset.bottom
-        return CGSize(width:width, height:height)
-    }
-
-    private var scrollViewCenter: CGPoint {
-        let scrollViewSize = scrollViewVisibleSize
-        return CGPoint(x: scrollViewSize.width / 2.0,
-                       y: scrollViewSize.height / 2.0)
-    }
-
-    private let cropOverlayDefaultPadding: CGFloat = 20
-    private var cropOverlayDefaultFrame: CGRect {
-        let buttonsViewGap: CGFloat = 20 * 2 + 64
-        let centeredViewBounds: CGRect
-        if view.bounds.size.height > view.bounds.size.width {
-            centeredViewBounds = CGRect(x: 0,
-                                        y: 0,
-                                        width: view.bounds.size.width,
-                                        height: view.bounds.size.height - buttonsViewGap)
-        } else {
-            centeredViewBounds = CGRect(x: 0,
-                                        y: 0,
-                                        width: view.bounds.size.width - buttonsViewGap,
-                                        height: view.bounds.size.height)
-        }
-        
-        let cropOverlayWidth = min(centeredViewBounds.size.width, centeredViewBounds.size.height) - 2 * cropOverlayDefaultPadding
-        let cropOverlayX = centeredViewBounds.size.width / 2 - cropOverlayWidth / 2
-        let cropOverlayY = centeredViewBounds.size.height / 2 - cropOverlayWidth / 2
-
-        return CGRect(x: cropOverlayX,
-                      y: cropOverlayY,
-                      width: cropOverlayWidth,
-                      height: cropOverlayWidth)
-    }
-	
-	public var onComplete: CameraViewCompletion?
-
-	let asset: PHAsset?
-	let image: UIImage?
-	
-	public init(image: UIImage, croppingParameters: CroppingParameters) {
-		self.croppingParameters = croppingParameters
-		self.asset = nil
-		self.image = image
-		super.init(nibName: "ConfirmViewController", bundle: CameraGlobals.shared.bundle)
-	}
-	
-	public init(asset: PHAsset, croppingParameters: CroppingParameters) {
-		self.croppingParameters = croppingParameters
-		self.asset = asset
-		self.image = nil
-		super.init(nibName: "ConfirmViewController", bundle: CameraGlobals.shared.bundle)
-	}
-	
-    public required init?(coder aDecoder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-	}
-	
-	public override var prefersStatusBarHidden: Bool {
-		return true
-	}
-	
-	public override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation {
-		return UIStatusBarAnimation.slide
-	}
-	
-	public override func viewDidLoad() {
-		super.viewDidLoad()
-
-		view.backgroundColor = UIColor.black
-
-        loadScrollView()
-        loadCropOverlay()
-
-		showSpinner()
-		
-		disable()
-		
-		if let asset = asset {
-			_ = SingleImageFetcher()
-				.setAsset(asset)
-				.setTargetSize(largestPhotoSize())
-				.onSuccess { [weak self] image in
-					self?.configureWithImage(image)
-					self?.hideSpinner()
-					self?.enable()
-				}
-				.onFailure { [weak self] error in
-					self?.hideSpinner()
-				}
-				.fetch()
-		} else if let image = image {
-			configureWithImage(image)
-			hideSpinner()
-			enable()
-		}
-	}
-
-    public override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-
-        if isFirstLayout {
-            isFirstLayout = false
-            activateCropOverlayConstraint()
-            spinner?.center = centeredView.center
-        }
-    }
-
-    private func activateCropOverlayConstraint() {
-        cropOverlayLeftConstraint.constant = cropOverlayDefaultFrame.origin.x
-        cropOverlayTopConstraint.constant = cropOverlayDefaultFrame.origin.y
-        cropOverlayWidthConstraint.constant = cropOverlayDefaultFrame.size.width
-        cropOverlayHeightConstraint.constant = cropOverlayDefaultFrame.size.height
-
-        cropOverlayLeftConstraint.isActive = true
-        cropOverlayTopConstraint.isActive = true
-        cropOverlayWidthConstraint.isActive = true
-        cropOverlayHeightConstraint.isActive = true
-    }
-
-    private func loadScrollView() {
-        scrollView.addSubview(imageView)
-        scrollView.delegate = self
-        scrollView.maximumZoomScale = 1
-    }
-
-    private func prepareScrollView() {
-        let scale = calculateMinimumScale(view.bounds.size)
-
-        scrollView.minimumZoomScale = scale
-        scrollView.zoomScale = scale
-
-        centerScrollViewContent()
-    }
-
-    private func loadCropOverlay() {
-        cropOverlay.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(cropOverlay)
-
-        cropOverlayLeftConstraint = cropOverlay.leftAnchor.constraint(equalTo: view.leftAnchor, constant: 0)
-        cropOverlayTopConstraint = cropOverlay.topAnchor.constraint(equalTo: view.topAnchor, constant: 0)
-        cropOverlayWidthConstraint = cropOverlay.widthAnchor.constraint(equalToConstant: 0)
-        cropOverlayHeightConstraint = cropOverlay.heightAnchor.constraint(equalToConstant: 0)
-
-        cropOverlay.delegate = self
-        cropOverlay.isHidden = !croppingParameters.isEnabled
-        cropOverlay.isResizable = croppingParameters.allowResizing
-        cropOverlay.isMovable = croppingParameters.allowMoving
-        cropOverlay.minimumSize = croppingParameters.minimumSize
-    }
-	
-	private func configureWithImage(_ image: UIImage) {
-		buttonActions()
-		
-		imageView.image = image
-		imageView.sizeToFit()
-        prepareScrollView()
-	}
-	
-	private func calculateMinimumScale(_ size: CGSize) -> CGFloat {
-		var _size = size
-		
-		if croppingParameters.isEnabled {
-            _size = cropOverlayDefaultFrame.size
-		}
-		
-		guard let image = imageView.image else {
-            return 1
-		}
-		
-		let scaleWidth = _size.width / image.size.width
-		let scaleHeight = _size.height / image.size.height
-
-		return min(scaleWidth, scaleHeight)
-	}
-	
-	private func centerScrollViewContent() {
-        guard let image = imageView.image else {
-            return
-        }
-
-        let imgViewSize = imageView.frame.size
-        let imageSize = image.size
-
-        var realImgSize: CGSize
-        if imageSize.width / imageSize.height > imgViewSize.width / imgViewSize.height {
-            realImgSize = CGSize(width: imgViewSize.width,height: imgViewSize.width / imageSize.width * imageSize.height)
-        } else {
-            realImgSize = CGSize(width: imgViewSize.height / imageSize.height * imageSize.width, height: imgViewSize.height)
-        }
-
-        var frame = CGRect.zero
-        frame.size = realImgSize
-        imageView.frame = frame
-
-        let screenSize  = scrollView.frame.size
-        let offx = screenSize.width > realImgSize.width ? (screenSize.width - realImgSize.width) / 2 : 0
-        let offy = screenSize.height > realImgSize.height ? (screenSize.height - realImgSize.height) / 2 : 0
-        scrollView.contentInset = UIEdgeInsets(top: offy,
-                                               left: offx,
-                                               bottom: offy,
-                                               right: offx)
-	}
-	
-	private func buttonActions() {
-		confirmButton.action = { [weak self] in self?.confirmPhoto() }
-		cancelButton.action = { [weak self] in self?.cancel() }
-	}
-	
-	internal func cancel() {
-		onComplete?(nil, nil)
-	}
-	
-	internal func confirmPhoto() {
-		
-		guard let image = imageView.image else {
-			return
-		}
-		
-		disable()
-		
-		imageView.isHidden = true
-		
-		showSpinner()
-		
-		if let asset = asset {
-			var fetcher = SingleImageFetcher()
-				.onSuccess { [weak self] image in
-					self?.onComplete?(image, self?.asset)
-					self?.hideSpinner()
-					self?.enable()
-				}
-				.onFailure { [weak self] error in
-					self?.hideSpinner()
-					self?.showNoImageScreen(error)
-				}
-				.setAsset(asset)
-			if croppingParameters.isEnabled {
-				let rect = normalizedRect(makeProportionalCropRect(), orientation: image.imageOrientation)
-				fetcher = fetcher.setCropRect(rect)
-			}
-			
-			fetcher = fetcher.fetch()
-		} else {
-			var newImage = image
-			
-			if croppingParameters.isEnabled {
-				let cropRect = makeProportionalCropRect()
-				let resizedCropRect = CGRect(x: (image.size.width) * cropRect.origin.x,
-				                     y: (image.size.height) * cropRect.origin.y,
-				                     width: (image.size.width * cropRect.width),
-				                     height: (image.size.height * cropRect.height))
-				newImage = image.crop(rect: resizedCropRect)
-			}
-			
-			onComplete?(newImage, nil)
-			hideSpinner()
-			enable()
-		}
-	}
-	
-	func showSpinner() {
-		spinner = UIActivityIndicatorView()
-        spinner!.style = .white
-        spinner!.center = centeredView.center
-		spinner!.startAnimating()
-		
-		view.addSubview(spinner!)
-        view.bringSubviewToFront(spinner!)
-    }
-	
-	func hideSpinner() {
-		spinner?.stopAnimating()
-		spinner?.removeFromSuperview()
-	}
-	
-	func disable() {
-		confirmButton.isEnabled = false
-	}
-	
-	func enable() {
-		confirmButton.isEnabled = true
-	}
-	
-	func showNoImageScreen(_ error: NSError) {
-		let permissionsView = PermissionsView(frame: view.bounds)
-		
-		let desc = localizedString("error.cant-fetch-photo.description")
-		
-		permissionsView.configureInView(view, title: error.localizedDescription, description: desc, completion: { [weak self] in self?.cancel() })
-	}
-	
-	private func makeProportionalCropRect() -> CGRect {
-        var cropRect = cropOverlay.croppedRect
-        cropRect.origin.x += scrollView.contentOffset.x - imageView.frame.origin.x
-        cropRect.origin.y += scrollView.contentOffset.y - imageView.frame.origin.y
-
-		let normalizedX = max(0, cropRect.origin.x / imageView.frame.width)
-		let normalizedY = max(0, cropRect.origin.y / imageView.frame.height)
-
-        let extraWidth = min(0, cropRect.origin.x)
-        let extraHeight = min(0, cropRect.origin.y)
-
-		let normalizedWidth = min(1, (cropRect.width + extraWidth) / imageView.frame.width)
-		let normalizedHeight = min(1, (cropRect.height + extraHeight) / imageView.frame.height)
-		
-		return CGRect(x: normalizedX, y: normalizedY, width: normalizedWidth, height: normalizedHeight)
-	}
-	
-}
-
-extension ConfirmViewController: UIScrollViewDelegate {
-
-    public func viewForZooming(in scrollView: UIScrollView) -> UIView? {
-        return imageView
-    }
-
-    public func scrollViewDidZoom(_ scrollView: UIScrollView) {
-        centerScrollViewContent()
-    }
-}
-
-extension ConfirmViewController: CropOverlayDelegate {
-
-    func didMoveCropOverlay(newFrame: CGRect) {
-        cropOverlayLeftConstraint.constant = newFrame.origin.x
-        cropOverlayTopConstraint.constant = newFrame.origin.y
-        cropOverlayWidthConstraint.constant = newFrame.size.width
-        cropOverlayHeightConstraint.constant = newFrame.size.height
-    }
-}
-
-extension UIImage {
-	func crop(rect: CGRect) -> UIImage {
-
-		var rectTransform: CGAffineTransform
-		switch imageOrientation {
-		case .left:
-			rectTransform = CGAffineTransform(rotationAngle: radians(90)).translatedBy(x: 0, y: -size.height)
-		case .right:
-			rectTransform = CGAffineTransform(rotationAngle: radians(-90)).translatedBy(x: -size.width, y: 0)
-		case .down:
-			rectTransform = CGAffineTransform(rotationAngle: radians(-180)).translatedBy(x: -size.width, y: -size.height)
-		default:
-			rectTransform = CGAffineTransform.identity
-		}
-		
-		rectTransform = rectTransform.scaledBy(x: scale, y: scale)
-		
-		if let cropped = cgImage?.cropping(to: rect.applying(rectTransform)) {
-			return UIImage(cgImage: cropped, scale: scale, orientation: imageOrientation).fixOrientation()
-		}
-		
-		return self
-	}
-	
-	func fixOrientation() -> UIImage {
-		if imageOrientation == .up {
-			return self
-		}
-		
-		UIGraphicsBeginImageContextWithOptions(size, false, scale)
-		draw(in: CGRect(origin: .zero, size: size))
-		let normalizedImage: UIImage = UIGraphicsGetImageFromCurrentImageContext() ?? self
-		UIGraphicsEndImageContext()
-		
-		return normalizedImage
-	}
-}
+<?xml version="1.0" encoding="UTF-8"?>
+<document type="com.apple.InterfaceBuilder3.CocoaTouch.XIB" version="3.0" toolsVersion="15505" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" useTraitCollections="YES" colorMatched="YES">
+    <device id="retina4_0" orientation="portrait" appearance="light"/>
+    <dependencies>
+        <deployment identifier="iOS"/>
+        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="15510"/>
+        <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
+    </dependencies>
+    <objects>
+        <placeholder placeholderIdentifier="IBFilesOwner" id="-1" userLabel="File's Owner" customClass="ConfirmViewController" customModule="ALCameraViewController" customModuleProvider="target">
+            <connections>
+                <outlet property="cancelButton" destination="ASf-ZD-cIs" id="YM7-Ea-rF1"/>
+                <outlet property="centeredView" destination="KYd-D9-K5d" id="CmX-BA-VtZ"/>
+                <outlet property="confirmButton" destination="yRi-ES-LfN" id="fz7-Sl-tVe"/>
+                <outlet property="scrollView" destination="oUR-U3-uEM" id="rF0-ZM-RmA"/>
+                <outlet property="view" destination="iN0-l3-epB" id="FcS-Dy-kqF"/>
+            </connections>
+        </placeholder>
+        <placeholder placeholderIdentifier="IBFirstResponder" id="-2" customClass="UIResponder"/>
+        <view contentMode="scaleToFill" id="iN0-l3-epB">
+            <rect key="frame" x="0.0" y="0.0" width="320" height="568"/>
+            <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+            <subviews>
+                <scrollView clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="oUR-U3-uEM">
+                    <rect key="frame" x="0.0" y="0.0" width="320" height="568"/>
+                </scrollView>
+                <view userInteractionEnabled="NO" contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="KYd-D9-K5d">
+                    <rect key="frame" x="0.0" y="0.0" width="320" height="464"/>
+                </view>
+                <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="ASf-ZD-cIs">
+                    <rect key="frame" x="20" y="484" width="64" height="64"/>
+                    <constraints>
+                        <constraint firstAttribute="height" constant="64" id="J7n-mn-Ebe"/>
+                        <constraint firstAttribute="width" constant="64" id="YWt-e6-Bvy"/>
+                    </constraints>
+                    <state key="normal" image="retakeButton"/>
+                </button>
+                <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="yRi-ES-LfN">
+                    <rect key="frame" x="236" y="484" width="64" height="64"/>
+                    <constraints>
+                        <constraint firstAttribute="height" constant="64" id="FdJ-mW-Tx6"/>
+                        <constraint firstAttribute="width" constant="64" id="urS-JS-i1S"/>
+                    </constraints>
+                    <state key="normal" image="confirmButton"/>
+                </button>
+            </subviews>
+            <color key="backgroundColor" red="1" green="1" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+            <constraints>
+                <constraint firstItem="ASf-ZD-cIs" firstAttribute="leading" secondItem="iN0-l3-epB" secondAttribute="leading" constant="20" id="1AT-7k-2QI"/>
+                <constraint firstAttribute="trailing" secondItem="oUR-U3-uEM" secondAttribute="trailing" id="7A6-HH-MEu"/>
+                <constraint firstAttribute="bottom" secondItem="yRi-ES-LfN" secondAttribute="bottom" constant="20" id="7jo-lC-34t"/>
+                <constraint firstItem="ASf-ZD-cIs" firstAttribute="centerX" secondItem="iN0-l3-epB" secondAttribute="centerX" constant="-45" id="89L-rE-rmd"/>
+                <constraint firstAttribute="bottom" secondItem="oUR-U3-uEM" secondAttribute="bottom" id="8mU-82-Hf6"/>
+                <constraint firstItem="oUR-U3-uEM" firstAttribute="top" secondItem="iN0-l3-epB" secondAttribute="top" id="92s-g3-wfK"/>
+                <constraint firstItem="KYd-D9-K5d" firstAttribute="leading" secondItem="yRi-ES-LfN" secondAttribute="trailing" id="CcA-mG-BLU"/>
+                <constraint firstItem="yRi-ES-LfN" firstAttribute="top" secondItem="KYd-D9-K5d" secondAttribute="bottom" constant="20" id="Ck2-xk-HbG"/>
+                <constraint firstItem="oUR-U3-uEM" firstAttribute="leading" secondItem="iN0-l3-epB" secondAttribute="leading" id="Cuy-cw-jOk"/>
+                <constraint firstAttribute="bottom" secondItem="ASf-ZD-cIs" secondAttribute="bottom" constant="20" id="DZ5-WA-3ZQ"/>
+                <constraint firstAttribute="bottom" secondItem="yRi-ES-LfN" secondAttribute="bottom" constant="60" id="H4a-3r-r5r"/>
+                <constraint firstItem="oUR-U3-uEM" firstAttribute="leading" secondItem="iN0-l3-epB" secondAttribute="leading" id="J3N-Vr-euu"/>
+                <constraint firstAttribute="trailing" secondItem="KYd-D9-K5d" secondAttribute="trailing" id="JLk-PT-5kn"/>
+                <constraint firstAttribute="trailing" secondItem="yRi-ES-LfN" secondAttribute="trailing" constant="20" id="M7P-T7-qoy"/>
+                <constraint firstItem="ASf-ZD-cIs" firstAttribute="leading" secondItem="iN0-l3-epB" secondAttribute="leading" constant="30" id="Rwi-4K-QRb"/>
+                <constraint firstItem="ASf-ZD-cIs" firstAttribute="bottom" secondItem="yRi-ES-LfN" secondAttribute="top" constant="-60" id="TLl-L0-yLb"/>
+                <constraint firstAttribute="trailing" secondItem="KYd-D9-K5d" secondAttribute="trailing" id="YBv-2a-KdQ"/>
+                <constraint firstItem="KYd-D9-K5d" firstAttribute="top" secondItem="iN0-l3-epB" secondAttribute="top" id="Yhb-Y3-ngX"/>
+                <constraint firstItem="KYd-D9-K5d" firstAttribute="leading" secondItem="iN0-l3-epB" secondAttribute="leading" id="aj9-Xh-WHL"/>
+                <constraint firstItem="KYd-D9-K5d" firstAttribute="top" secondItem="iN0-l3-epB" secondAttribute="top" id="hPp-8q-A1p"/>
+                <constraint firstItem="ASf-ZD-cIs" firstAttribute="top" secondItem="KYd-D9-K5d" secondAttribute="bottom" id="iar-0y-gBe"/>
+                <constraint firstAttribute="bottom" secondItem="oUR-U3-uEM" secondAttribute="bottom" id="iw9-Cg-Kkk"/>
+                <constraint firstItem="oUR-U3-uEM" firstAttribute="top" secondItem="iN0-l3-epB" secondAttribute="top" id="kDN-mM-6KE"/>
+                <constraint firstAttribute="trailing" secondItem="oUR-U3-uEM" secondAttribute="trailing" id="mL3-PM-TEd"/>
+                <constraint firstAttribute="bottom" secondItem="KYd-D9-K5d" secondAttribute="bottom" id="o6j-Qo-hB5"/>
+                <constraint firstItem="ASf-ZD-cIs" firstAttribute="centerY" secondItem="iN0-l3-epB" secondAttribute="centerY" constant="-54" id="pNU-uB-Igt"/>
+                <constraint firstItem="yRi-ES-LfN" firstAttribute="leading" secondItem="iN0-l3-epB" secondAttribute="leading" constant="30" id="v0q-tU-ywG"/>
+                <constraint firstItem="KYd-D9-K5d" firstAttribute="leading" secondItem="iN0-l3-epB" secondAttribute="leading" id="vnU-ey-3GX"/>
+                <constraint firstAttribute="trailing" secondItem="KYd-D9-K5d" secondAttribute="trailing" id="wTn-DN-uQO"/>
+                <constraint firstItem="KYd-D9-K5d" firstAttribute="top" secondItem="iN0-l3-epB" secondAttribute="top" id="wn3-We-BBK"/>
+                <constraint firstItem="yRi-ES-LfN" firstAttribute="top" secondItem="ASf-ZD-cIs" secondAttribute="top" id="xFS-1L-oa4"/>
+                <constraint firstItem="yRi-ES-LfN" firstAttribute="centerX" secondItem="iN0-l3-epB" secondAttribute="centerX" constant="45" id="xFc-F1-V7I"/>
+            </constraints>
+            <variation key="default">
+                <mask key="constraints">
+                    <exclude reference="CcA-mG-BLU"/>
+                    <exclude reference="JLk-PT-5kn"/>
+                    <exclude reference="YBv-2a-KdQ"/>
+                    <exclude reference="Yhb-Y3-ngX"/>
+                    <exclude reference="aj9-Xh-WHL"/>
+                    <exclude reference="hPp-8q-A1p"/>
+                    <exclude reference="o6j-Qo-hB5"/>
+                    <exclude reference="vnU-ey-3GX"/>
+                    <exclude reference="wTn-DN-uQO"/>
+                    <exclude reference="wn3-We-BBK"/>
+                    <exclude reference="7A6-HH-MEu"/>
+                    <exclude reference="8mU-82-Hf6"/>
+                    <exclude reference="92s-g3-wfK"/>
+                    <exclude reference="Cuy-cw-jOk"/>
+                    <exclude reference="89L-rE-rmd"/>
+                    <exclude reference="DZ5-WA-3ZQ"/>
+                    <exclude reference="Rwi-4K-QRb"/>
+                    <exclude reference="TLl-L0-yLb"/>
+                    <exclude reference="iar-0y-gBe"/>
+                    <exclude reference="pNU-uB-Igt"/>
+                    <exclude reference="7jo-lC-34t"/>
+                    <exclude reference="Ck2-xk-HbG"/>
+                    <exclude reference="H4a-3r-r5r"/>
+                    <exclude reference="v0q-tU-ywG"/>
+                    <exclude reference="xFS-1L-oa4"/>
+                    <exclude reference="xFc-F1-V7I"/>
+                </mask>
+            </variation>
+            <variation key="heightClass=compact">
+                <mask key="subviews">
+                    <include reference="KYd-D9-K5d"/>
+                </mask>
+                <mask key="constraints">
+                    <include reference="CcA-mG-BLU"/>
+                    <include reference="Yhb-Y3-ngX"/>
+                    <include reference="o6j-Qo-hB5"/>
+                    <include reference="wTn-DN-uQO"/>
+                    <include reference="Rwi-4K-QRb"/>
+                    <include reference="TLl-L0-yLb"/>
+                    <include reference="pNU-uB-Igt"/>
+                    <include reference="v0q-tU-ywG"/>
+                </mask>
+            </variation>
+            <variation key="heightClass=regular-widthClass=compact">
+                <mask key="subviews">
+                    <include reference="KYd-D9-K5d"/>
+                </mask>
+                <mask key="constraints">
+                    <include reference="JLk-PT-5kn"/>
+                    <include reference="aj9-Xh-WHL"/>
+                    <include reference="wn3-We-BBK"/>
+                    <include reference="DZ5-WA-3ZQ"/>
+                    <include reference="7jo-lC-34t"/>
+                    <include reference="Ck2-xk-HbG"/>
+                </mask>
+            </variation>
+            <variation key="heightClass=regular-widthClass=regular">
+                <mask key="constraints">
+                    <include reference="YBv-2a-KdQ"/>
+                    <include reference="hPp-8q-A1p"/>
+                    <include reference="vnU-ey-3GX"/>
+                    <include reference="7A6-HH-MEu"/>
+                    <include reference="8mU-82-Hf6"/>
+                    <include reference="92s-g3-wfK"/>
+                    <include reference="Cuy-cw-jOk"/>
+                    <include reference="89L-rE-rmd"/>
+                    <include reference="iar-0y-gBe"/>
+                    <include reference="H4a-3r-r5r"/>
+                    <include reference="xFS-1L-oa4"/>
+                    <include reference="xFc-F1-V7I"/>
+                </mask>
+            </variation>
+            <point key="canvasLocation" x="131" y="154"/>
+        </view>
+    </objects>
+    <resources>
+        <image name="confirmButton" width="44" height="44"/>
+        <image name="retakeButton" width="44" height="44"/>
+    </resources>
+</document>
